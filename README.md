@@ -88,8 +88,9 @@ Same code path as prod — only the server URL differs.
 
 ## Status
 
-Running end-to-end in development: the daemon logs in, registers on `/agent`, and real tasks
-dispatch through Claude Code and report back in chat. Visual QA is wired in — the agent gets a
+In daily use as the development loop behind [takt](https://takt.chat): the daemon logs in,
+registers on `/agent`, and tasks dispatched from the director run through Claude Code and report
+back in chat — this is how takt's own surfaces get built. Visual QA is wired in — the agent gets a
 headless browser (Playwright MCP) and its screenshots stream back to the director as images, not
-descriptions. Production rollout is gated behind the server-side kill switch and a deploy. An
-interactive (non-auto-deny) review gate is future work.
+descriptions. What remains gated behind the server-side kill switch is exposing dispatch to end
+users inside production chats. An interactive (non-auto-deny) review gate is future work.
