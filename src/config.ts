@@ -21,7 +21,6 @@ const DEFAULT_SUPABASE_URL = 'https://kfizkdnszetbdtfmiwsy.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_l7LH9QxS1YEMC2cCLvfCJQ_QxtdayYb';
 
 export interface Config {
-  anthropicApiKey: string;
   /** the local repo Claude Code works in */
   repoPath: string;
   /** the Takt server the daemon dials (socket.io origin); /agent namespace is appended */
@@ -67,8 +66,7 @@ function list(v: string | undefined): string[] {
 export function loadConfig(): Config {
   const env = process.env;
 
-  const anthropicApiKey = env.ANTHROPIC_API_KEY ?? '';
-  if (!anthropicApiKey && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (!env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     console.warn(
       '[takt-director] No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN set — the spawned agent will use ' +
         'your logged-in Claude Code subscription (make sure `claude` is logged in on this machine). If ' +
@@ -83,13 +81,12 @@ export function loadConfig(): Config {
   const playwrightArgs = list(env.PLAYWRIGHT_MCP_ARGS);
 
   return {
-    anthropicApiKey,
     repoPath: env.REPO_PATH || process.cwd(),
     taktServerUrl,
     supabaseUrl: env.SUPABASE_URL || DEFAULT_SUPABASE_URL,
     supabaseAnonKey: env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY,
     oauthProvider: env.OAUTH_PROVIDER || 'google',
-    oauthCallbackPort: Number(env.OAUTH_CALLBACK_PORT ?? 4318),
+    oauthCallbackPort: num(env.OAUTH_CALLBACK_PORT, 4318),
     reviewTools: list(env.REVIEW_TOOLS),
     reviewBashPatterns: bashPatterns.length ? bashPatterns : DEFAULT_BASH_PATTERNS,
     // Absolute command/args: the SDK spawns MCP servers with the TARGET REPO as cwd,

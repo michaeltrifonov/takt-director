@@ -4,7 +4,7 @@ import type { Config } from '../config';
 import type { AuthHandle } from '../auth';
 import { createClaudeCodeSession, type ClaudeCodeAdapterOptions } from '../adapters/claudeCodeAdapter';
 import { loadSessionId, saveSessionId } from '../util/sessionStore';
-import type { Message, ReviewDecision, Session, SessionEvent } from '../session/types';
+import type { Message, ReviewDecision, Session } from '../session/types';
 import { DIRECTOR_PROTOCOL } from '../protocol';
 
 /**
@@ -175,7 +175,7 @@ export function startAgentClient(config: Config, auth: AuthHandle): void {
             );
             continue;
           }
-          const taskId = (event as Extract<SessionEvent, { taskId?: string }>).taskId ?? currentTaskId;
+          const taskId = event.taskId ?? currentTaskId;
           // A turn reached a terminal state — it's no longer the active task.
           if (taskId === activeTaskId && (event.kind === 'error' || (event.kind === 'status' && (event.state === 'completed' || event.state === 'failed')))) {
             activeTaskId = null;
@@ -237,8 +237,8 @@ export function startAgentClient(config: Config, auth: AuthHandle): void {
     currentTaskId = payload.taskId;
 
     // workflow=true → opt this turn into a multi-agent workflow via the keyword.
-    // DIRECTOR_PROTOCOL is always prepended so the agent runs under the Skeptical
-    // Contractor protocol regardless of how the instruction is phrased.
+    // DIRECTOR_PROTOCOL is always prepended so the agent runs under the
+    // Sub-Contractor Protocol regardless of how the instruction is phrased.
     const taskInstruction = payload.workflow
       ? `${payload.instruction}\n\nTackle this with ultracode — orchestrate it as a multi-agent workflow.`
       : payload.instruction;

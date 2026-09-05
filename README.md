@@ -10,7 +10,7 @@ when satisfied.
 ## Install (one step)
 
 ```bash
-git clone <takt-director repo> && cd takt-director
+git clone https://github.com/michaeltrifonov/takt-director.git && cd takt-director
 npm install
 cp .env.example .env          # set REPO_PATH (the repo to drive); everything else has defaults
 npm run dev                   # opens a browser to sign in with your Takt account → "connected"
@@ -49,11 +49,12 @@ src/
   index.ts                     entrypoint — login, then start the agent client
   config.ts                    env → Config (REPO_PATH + Takt/Supabase defaults)
   auth.ts                      Supabase PKCE browser login + cached refresh token
+  protocol.ts                  the Sub-Contractor Protocol, prepended to every dispatched task
   bridge/client.ts             outbound socket.io client → /agent namespace; wires tasks to a Session
   adapters/claudeCodeAdapter.ts  implements the Session via @anthropic-ai/claude-agent-sdk
   session/types.ts             the Session seam + wire types
   consult/                     the ask_takt MCP shim (Claude -> Takt)
-  util/                        async queue + per-repo session-id persistence
+  util/                        async queue, thrash breaker, per-repo session-id persistence
 ```
 
 ## How a task runs
@@ -87,7 +88,8 @@ Same code path as prod — only the server URL differs.
 
 ## Status
 
-Typechecks clean against the installed SDKs. The daemon logs in, dials the server's `/agent`
-namespace, and registers; the server routes `agent_task` dispatches per user. Remaining before a full
-live run: enable the `takt-director-enabled` flag, deploy the server, and run a real task end-to-end.
-Image/screenshot artifacts and an interactive (non-auto-deny) review gate are future work.
+Running end-to-end in development: the daemon logs in, registers on `/agent`, and real tasks
+dispatch through Claude Code and report back in chat. Visual QA is wired in — the agent gets a
+headless browser (Playwright MCP) and its screenshots stream back to the director as images, not
+descriptions. Production rollout is gated behind the `takt-director-enabled` kill switch and a
+server deploy. An interactive (non-auto-deny) review gate is future work.

@@ -8,9 +8,9 @@ import { TaktClient } from './taktClient';
  * Takt-MCP — the consult / reverse channel.
  *
  * A standalone stdio MCP server exposing `ask_takt`, loaded into the Claude Code
- * session by the adapter. This is the *legit* use of MCP here: Claude initiates the
- * call (host pulls a capability). It is also the shippable "drop Takt into any MCP
- * host (Claude / Codex / Cursor)" artifact — the reach play — run on its own.
+ * session by the adapter. This is the natural direction for MCP here: Claude
+ * initiates the call (host pulls a capability). Run on its own, it also drops
+ * Takt into any MCP host (Claude / Codex / Cursor).
  */
 const takt = new TaktClient(
   process.env.TAKT_API_URL ?? 'http://localhost:8080',

@@ -96,25 +96,12 @@ export type SessionEvent =
   | { kind: 'session'; taskId?: string; sessionId: string }
   | { kind: 'error'; taskId: string; error: string };
 
-/** Agent-Card-like handshake describing this director endpoint. */
-export interface AgentCard {
-  name: string;
-  description: string;
-  version: string;
-  streaming: boolean;
-  pushNotifications: boolean;
-  skills: Array<{ id: string; name: string; description: string }>;
-}
-
 /**
  * The seam itself. One Session == one live Claude Code agent loop.
  * `events()` has a single consumer (the bridge connection).
  */
 export interface Session {
   readonly id: string;
-
-  /** Agent-Card handshake. */
-  card(): AgentCard;
 
   /** Director -> agent. Injects a user message into the running session. Returns the taskId. */
   send(message: Message): Promise<{ taskId: string }>;

@@ -11,7 +11,6 @@ import {
 import { AsyncQueue, deferred } from '../util/asyncQueue';
 import { ThrashBreaker, type ThrashConfig } from '../util/thrashBreaker';
 import type { Artifact, Message, ReviewDecision, Session, SessionEvent, VisualPayload } from '../session/types';
-import { buildAgentCard } from '../session/card';
 
 /**
  * Claude Code adapter — implements the Session seam by driving the Claude Agent SDK
@@ -27,15 +26,12 @@ export interface ClaudeCodeAdapterOptions {
   cwd: string;
   /** appended to Claude Code's default system prompt (preset+append) */
   appendSystemPrompt?: string;
-  allowedTools?: string[];
   /** 'acceptEdits' = auto-stage file edits (you review the diff yourself); Bash still gated. */
   permissionMode?: PermissionMode;
   /** MCP servers loaded into the session (e.g. the ask_takt consult shim). */
   mcpServers?: Options['mcpServers'];
   /** resume a prior SDK session id (picks up code-state context) */
   resumeSessionId?: string;
-  /** called when the SDK session id is first learned (for persistence) */
-  onSessionId?: (sessionId: string) => void;
 
   // ── review gate policy ──
   reviewTools?: string[];
@@ -94,7 +90,6 @@ export function createClaudeCodeSession(opts: ClaudeCodeAdapterOptions): Session
     if (!sessionId || sessionId === sdkSessionId) return;
     sdkSessionId = sessionId;
     emit({ kind: 'session', taskId: currentTaskId, sessionId });
-    opts.onSessionId?.(sessionId);
   }
 
   // Thrash breaker tripped: report the task failed (so the manager regains control)
@@ -102,7 +97,7 @@ export function createClaudeCodeSession(opts: ClaudeCodeAdapterOptions): Session
   function tripThrash(reason: string): void {
     if (trippedTaskId === currentTaskId) return;
     trippedTaskId = currentTaskId;
-    emit({ kind: 'message', taskId: currentTaskId, message: agentMessage(`⚠️ Stopped by the thrash breaker: ${reason}.`) });
+    emit({ kind: 'message', taskId: currentTaskId, message: agentMessage(`Stopped by the thrash breaker: ${reason}.`) });
     emit({ kind: 'status', taskId: currentTaskId, state: 'failed' });
     void queryHandle?.interrupt();
   }
@@ -276,7 +271,6 @@ export function createClaudeCodeSession(opts: ClaudeCodeAdapterOptions): Session
       if (opts.appendSystemPrompt) {
         options.systemPrompt = { type: 'preset', preset: 'claude_code', append: opts.appendSystemPrompt };
       }
-      if (opts.allowedTools) options.allowedTools = opts.allowedTools;
       if (opts.mcpServers) options.mcpServers = opts.mcpServers;
       if (sdkSessionId) options.resume = sdkSessionId;
 
@@ -296,7 +290,6 @@ export function createClaudeCodeSession(opts: ClaudeCodeAdapterOptions): Session
 
   return {
     id,
-    card: () => buildAgentCard(),
     async send(message: Message) {
       if (message.taskId) currentTaskId = message.taskId;
       // Dedup is per-turn: each director turn (e.g. a new agent_task round) may
@@ -323,6 +316,9 @@ export function createClaudeCodeSession(opts: ClaudeCodeAdapterOptions): Session
       await queryHandle?.interrupt();
     },
     async close() {
+      // Stop an in-flight turn too: closing only the input stream would leave the
+      // old worker running (and editing the repo) alongside a replacement session.
+      await queryHandle?.interrupt().catch(() => {});
       inbound.close();
       for (const [reviewId, resolve] of pendingReviews) {
         resolve({ reviewId, approved: false, reason: 'session closed' });
