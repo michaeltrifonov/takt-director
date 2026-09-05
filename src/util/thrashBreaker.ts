@@ -5,8 +5,8 @@
  * same file with the same content, or grinding tokens without converging. The
  * adapter feeds every tool call and token-usage update through here; when a
  * threshold trips, the adapter interrupts the SDK query and reports the task as
- * failed so the cloud manager (Takt) gets control back instead of paying for an
- * agent spinning in place.
+ * failed so the director gets control back instead of paying for an agent
+ * spinning in place.
  *
  * All three limits are independent and any can be disabled with 0:
  *   - maxRepeats   : consecutive IDENTICAL tool calls (same tool + input). The

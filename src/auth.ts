@@ -1,26 +1,30 @@
 import http from 'node:http';
 import { exec } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import type { Config } from './config';
 
 /**
- * Supabase login for the daemon.
+ * Daemon auth.
  *
- * The daemon authenticates AS a Takt user, exactly like the app client: it holds
- * a Supabase session and presents the access token when it dials the server's
- * `/agent` namespace (verified there with the same `verifyToken` path). First run
- * does a one-time PKCE browser login (Google/Apple); the refresh token is cached
- * to `~/.takt-director/supabase-session.json` so subsequent runs are silent.
+ * The daemon authenticates AS a user of the director service: it presents a
+ * bearer access token when it dials the server's `/agent` namespace, and the
+ * server verifies it against the same identity provider its app clients use.
+ * Two ways in:
+ *
+ *   - DIRECTOR_TOKEN — a static token provisioned out of band. Simplest; no browser.
+ *   - OAuth2/OIDC PKCE — first run does a one-time browser login against the
+ *     configured authorize/token endpoints; the refresh token is cached to
+ *     `~/.takt-director/session.json` so subsequent runs are silent.
  *
  * Loopback + PKCE is the standard CLI auth pattern (RFC 8252): the redirect lands
  * on the user's own machine and the code is useless without the locally-held
- * verifier, so it's safe even though the redirect URL is a global allowlist entry.
+ * verifier, so a fixed localhost redirect URI is safe to allowlist globally.
  */
 
-const SESSION_PATH = join(homedir(), '.takt-director', 'supabase-session.json');
+const SESSION_PATH = join(homedir(), '.takt-director', 'session.json');
 
 export interface AuthHandle {
   /** A valid access token, refreshing first if it's near expiry. */
@@ -28,16 +32,15 @@ export interface AuthHandle {
   email?: string;
 }
 
-// In-memory storage so the PKCE code_verifier set by signInWithOAuth survives
-// until exchangeCodeForSession reads it (same process run; no disk needed).
-function memoryStorage() {
-  const m = new Map<string, string>();
-  return {
-    getItem: (k: string): string | null => m.get(k) ?? null,
-    setItem: (k: string, v: string): void => void m.set(k, v),
-    removeItem: (k: string): void => void m.delete(k),
-  };
+interface TokenSet {
+  accessToken: string;
+  /** epoch ms; 0 = unknown (treated as long-lived) */
+  expiresAtMs: number;
+  refreshToken?: string;
+  email?: string;
 }
+
+const b64url = (buf: Buffer): string => buf.toString('base64url');
 
 function loadSaved(): { refresh_token: string } | null {
   try {
@@ -49,12 +52,13 @@ function loadSaved(): { refresh_token: string } | null {
   }
 }
 
-function saveSession(session: Session): void {
+function saveSession(t: TokenSet): void {
+  if (!t.refreshToken) return;
   try {
     mkdirSync(dirname(SESSION_PATH), { recursive: true });
     writeFileSync(
       SESSION_PATH,
-      JSON.stringify({ refresh_token: session.refresh_token, email: session.user.email }, null, 2),
+      JSON.stringify({ refresh_token: t.refreshToken, email: t.email }, null, 2),
       'utf8',
     );
   } catch {
@@ -69,109 +73,157 @@ function openBrowser(url: string): void {
   });
 }
 
-export async function ensureLogin(config: Config): Promise<AuthHandle> {
-  const supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-    auth: {
-      flowType: 'pkce',
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      storage: memoryStorage(),
-    },
-  });
+/** Best-effort display identity from an OIDC id_token (claims are not verified — display only). */
+function emailFromIdToken(idToken: string | undefined): string | undefined {
+  if (!idToken) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as {
+      email?: string;
+    };
+    return typeof payload.email === 'string' ? payload.email : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
-  let session: Session | null = null;
+async function tokenRequest(config: Config, params: Record<string, string>): Promise<TokenSet> {
+  const res = await fetch(config.oauthTokenUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: config.oauthClientId, ...params }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`token endpoint returned ${res.status}: ${body.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    id_token?: string;
+  };
+  if (!data.access_token) throw new Error('token endpoint returned no access_token');
+  return {
+    accessToken: data.access_token,
+    expiresAtMs: data.expires_in ? Date.now() + data.expires_in * 1000 : 0,
+    refreshToken: data.refresh_token,
+    email: emailFromIdToken(data.id_token),
+  };
+}
+
+export async function ensureLogin(config: Config): Promise<AuthHandle> {
+  // Static token: nothing to negotiate, nothing to refresh.
+  if (config.directorToken) {
+    const token = config.directorToken;
+    console.log('[takt-director] using DIRECTOR_TOKEN for auth');
+    return { getAccessToken: async () => token };
+  }
+
+  if (!config.oauthAuthorizeUrl || !config.oauthTokenUrl || !config.oauthClientId) {
+    throw new Error(
+      'no auth configured — set DIRECTOR_TOKEN, or OAUTH_AUTHORIZE_URL + OAUTH_TOKEN_URL + OAUTH_CLIENT_ID ' +
+        'for the one-time browser login (see .env.example)',
+    );
+  }
+
+  let current: TokenSet | null = null;
 
   // 1) Try a cached refresh token (silent).
   const saved = loadSaved();
   if (saved?.refresh_token) {
-    const { data, error } = await supabase.auth.refreshSession({ refresh_token: saved.refresh_token });
-    if (!error && data.session) {
-      session = data.session;
-      saveSession(session);
+    try {
+      current = await tokenRequest(config, { grant_type: 'refresh_token', refresh_token: saved.refresh_token });
+      // Providers that rotate refresh tokens return a new one; keep whichever is live.
+      current.refreshToken ??= saved.refresh_token;
+      saveSession(current);
+    } catch {
+      current = null; // fall through to a fresh browser login
     }
   }
 
   // 2) Otherwise, one-time browser login.
-  if (!session) {
-    session = await browserLogin(supabase, config);
-    saveSession(session);
+  if (!current) {
+    current = await browserLogin(config);
+    saveSession(current);
   }
 
-  console.log(`[takt-director] logged in as ${session.user.email ?? session.user.id}`);
-  let current: Session = session;
+  console.log(`[takt-director] logged in${current.email ? ` as ${current.email}` : ''}`);
+  let live: TokenSet = current;
 
   return {
-    email: current.user.email ?? undefined,
+    email: live.email,
     async getAccessToken(): Promise<string> {
-      const expiresAtMs = (current.expires_at ?? 0) * 1000;
-      // Refresh if expired or within 60s of expiry.
-      if (Date.now() > expiresAtMs - 60_000) {
-        const rt = current.refresh_token ?? loadSaved()?.refresh_token;
+      // Refresh if expired or within 60s of expiry (unknown expiry = long-lived).
+      if (live.expiresAtMs > 0 && Date.now() > live.expiresAtMs - 60_000) {
+        const rt = live.refreshToken ?? loadSaved()?.refresh_token;
         if (rt) {
-          const { data, error } = await supabase.auth.refreshSession({ refresh_token: rt });
-          if (!error && data.session) {
-            current = data.session;
-            saveSession(current);
-          } else {
+          try {
+            const next = await tokenRequest(config, { grant_type: 'refresh_token', refresh_token: rt });
+            next.refreshToken ??= rt;
+            next.email ??= live.email;
+            live = next;
+            saveSession(live);
+          } catch (e) {
             // Transient errors self-heal (socket.io re-invokes this on reconnect).
             // A revoked refresh token won't — surface it so the user re-runs login.
             console.warn(
-              `[takt-director] token refresh failed: ${error?.message ?? 'unknown'}. ` +
-                'If this persists, delete ~/.takt-director/supabase-session.json and restart to sign in again.',
+              `[takt-director] token refresh failed: ${e instanceof Error ? e.message : String(e)}. ` +
+                'If this persists, delete ~/.takt-director/session.json and restart to sign in again.',
             );
           }
         }
       }
-      return current.access_token;
+      return live.accessToken;
     },
   };
 }
 
-async function browserLogin(supabase: SupabaseClient, config: Config): Promise<Session> {
-  const redirectTo = `http://localhost:${config.oauthCallbackPort}/callback`;
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: config.oauthProvider as Parameters<SupabaseClient['auth']['signInWithOAuth']>[0]['provider'],
-    options: { redirectTo, skipBrowserRedirect: true },
-  });
-  if (error || !data?.url) {
-    throw new Error(`OAuth init failed: ${error?.message ?? 'no authorize URL returned'}`);
-  }
+async function browserLogin(config: Config): Promise<TokenSet> {
+  const redirectUri = `http://localhost:${config.oauthCallbackPort}/callback`;
+  const verifier = b64url(randomBytes(32));
+  const state = b64url(randomBytes(16));
 
-  return new Promise<Session>((resolve, reject) => {
+  const authorize = new URL(config.oauthAuthorizeUrl);
+  authorize.searchParams.set('response_type', 'code');
+  authorize.searchParams.set('client_id', config.oauthClientId);
+  authorize.searchParams.set('redirect_uri', redirectUri);
+  authorize.searchParams.set('code_challenge', b64url(createHash('sha256').update(verifier).digest()));
+  authorize.searchParams.set('code_challenge_method', 'S256');
+  authorize.searchParams.set('state', state);
+  if (config.oauthScopes) authorize.searchParams.set('scope', config.oauthScopes);
+
+  return new Promise<TokenSet>((resolve, reject) => {
     const server = http.createServer((req, res) => {
       void (async () => {
         try {
-          const url = new URL(req.url ?? '', redirectTo);
+          const url = new URL(req.url ?? '', redirectUri);
           if (!url.pathname.startsWith('/callback')) {
             res.writeHead(404);
             res.end();
             return;
           }
           const code = url.searchParams.get('code');
-          if (!code) {
+          if (!code || url.searchParams.get('state') !== state) {
             res.writeHead(400);
-            res.end('missing authorization code');
+            res.end('missing authorization code or state mismatch');
             return;
           }
-          const { data: exchanged, error: exErr } = await supabase.auth.exchangeCodeForSession(code);
-          if (exErr || !exchanged.session) {
-            res.writeHead(500);
-            res.end('sign-in failed — check the daemon logs');
-            server.close();
-            reject(exErr ?? new Error('no session returned from code exchange'));
-            return;
-          }
+          const tokens = await tokenRequest(config, {
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+            code_verifier: verifier,
+          });
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
           res.end(
             '<html><body style="font-family:system-ui;padding:3rem;text-align:center">' +
-              '<h2>✓ Signed in to Takt</h2><p>You can close this tab and return to the terminal.</p></body></html>',
+              '<h2>Signed in</h2><p>You can close this tab and return to the terminal.</p></body></html>',
           );
           server.close();
-          resolve(exchanged.session);
+          resolve(tokens);
         } catch (e) {
           res.writeHead(500);
-          res.end('error');
+          res.end('sign-in failed — check the daemon logs');
           server.close();
           reject(e as Error);
         }
@@ -183,9 +235,9 @@ async function browserLogin(supabase: SupabaseClient, config: Config): Promise<S
     server.listen(config.oauthCallbackPort, '127.0.0.1', () => {
       console.log(
         `[takt-director] opening your browser to sign in…\n` +
-          `   if it doesn't open, visit:\n   ${data.url}`,
+          `   if it doesn't open, visit:\n   ${authorize.toString()}`,
       );
-      openBrowser(data.url);
+      openBrowser(authorize.toString());
     });
   });
 }

@@ -10,21 +10,21 @@ import { DIRECTOR_PROTOCOL } from '../protocol';
 /**
  * The outbound agent client.
  *
- * Dials the Takt server's `/agent` namespace, authenticating as the logged-in
- * Takt user (Supabase access token). The server registers this connection and
- * routes that user's `agent_task` dispatches here. This is the reverse of the old
- * inbound bridge: the daemon makes an OUTBOUND connection, so it works behind any
- * NAT/firewall with nothing exposed publicly.
+ * Dials the director server's `/agent` namespace, authenticating as the logged-in
+ * user (bearer access token). The server registers this connection and routes
+ * that user's `agent_task` dispatches here. This is the reverse of a classic
+ * inbound webhook bridge: the daemon makes an OUTBOUND connection, so it works
+ * behind any NAT/firewall with nothing exposed publicly.
  *
- * Wire protocol (mirrors the server's director-bridge):
+ * Wire protocol (mirrored by the director server):
  *   server -> daemon  'agent:task'   { taskId, instruction, model?, effort?, workflow? }
  *   daemon -> server  'agent:event'  { taskId, event:SessionEvent }
  *   server -> daemon  'agent:review' { taskId, decision }
  *   server -> daemon  'agent:cancel' { taskId }
  *
  * One Claude Code Session per repo, reused across tasks (it resumes the SDK
- * session, so context carries over). Takt can pick model/effort per task; when
- * they change, the session is recreated WITH resume so context is preserved.
+ * session, so context carries over). The director picks model/effort per task;
+ * when they change, the session is recreated WITH resume so context is preserved.
  * Workflows are enabled on the session, and a task with workflow=true opts that
  * turn into a multi-agent workflow via the "ultracode" keyword. The server
  * serializes tasks per user, so the single Session is never driven concurrently.
@@ -32,9 +32,9 @@ import { DIRECTOR_PROTOCOL } from '../protocol';
 
 const ASK_TAKT_PROMPT =
   'You have an MCP tool `ask_takt` (server "takt"). When a decision is a matter of ' +
-  'taste, brand, or strategy and multiple options are viable, consult Takt instead of ' +
-  "guessing, and treat its answer as the director's call. Don't use it for routine " +
-  'mechanical choices.';
+  'taste, brand, or strategy and multiple options are viable, consult the director ' +
+  "instead of guessing, and treat its answer as the director's call. Don't use it for " +
+  'routine mechanical choices.';
 
 // Appended only when Playwright is loaded — tells the agent it can drive a browser
 // and that screenshots flow back to the director on their own (no need to narrate them).
@@ -51,8 +51,8 @@ const VISUAL_QA_PROMPT =
 // its maxHttpBufferSize to match; a viewport PNG sits comfortably under this.
 const MAX_VISUAL_DATAURL_CHARS = 7_000_000; // ~5.2MB decoded
 
-// Validate Takt's per-task knobs before they reach the SDK (the tool schema already
-// constrains them, but the daemon never trusts the wire).
+// Validate the director's per-task knobs before they reach the SDK (the dispatching
+// tool's schema already constrains them, but the daemon never trusts the wire).
 const VALID_MODELS = new Set(['opus', 'sonnet', 'haiku']);
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
@@ -82,7 +82,7 @@ function adapterOptionsFrom(
     reviewTools: config.reviewTools,
     reviewBashPatterns: config.reviewBashPatterns,
     resumeSessionId,
-    // Per-task knobs Takt chose (validated above; cast is safe).
+    // Per-task knobs the director chose (validated above; cast is safe).
     model: profile.model as ClaudeCodeAdapterOptions['model'],
     effort: profile.effort as ClaudeCodeAdapterOptions['effort'],
     // Always enable Workflows so a task can opt into multi-agent orchestration
@@ -93,13 +93,13 @@ function adapterOptionsFrom(
       // env REPLACES the subprocess env, so we merge process.env (for PATH etc.).
       takt: {
         type: 'stdio',
-        command: config.taktMcpCommand,
-        args: config.taktMcpArgs,
+        command: config.consultMcpCommand,
+        args: config.consultMcpArgs,
         env: {
           ...cleanEnv(process.env),
-          TAKT_API_URL: config.taktApiUrl,
-          TAKT_CONSULT_PATH: config.taktConsultPath,
-          ...(config.taktApiKey ? { TAKT_API_KEY: config.taktApiKey } : {}),
+          CONSULT_API_URL: config.consultApiUrl,
+          CONSULT_PATH: config.consultPath,
+          ...(config.consultApiKey ? { CONSULT_API_KEY: config.consultApiKey } : {}),
         },
       },
       // Playwright MCP — the browser the agent drives for visual QA. Screenshot
@@ -126,7 +126,7 @@ function adapterOptionsFrom(
 }
 
 export function startAgentClient(config: Config, auth: AuthHandle): void {
-  const socket: Socket = io(`${config.taktServerUrl}/agent`, {
+  const socket: Socket = io(`${config.directorUrl}/agent`, {
     transports: ['websocket'],
     // Re-run on every (re)connect so we always present a fresh access token.
     auth: (cb) => {
@@ -198,12 +198,12 @@ export function startAgentClient(config: Config, auth: AuthHandle): void {
 
   socket.on('connect', () => {
     console.log(
-      `[takt-director] connected to ${config.taktServerUrl} as ${auth.email ?? 'user'} — ready. ` +
+      `[takt-director] connected to ${config.directorUrl} as ${auth.email ?? 'user'} — ready. ` +
         `repo=${config.repoPath}`,
     );
   });
   socket.on('agent:ready', () => {
-    console.log('[takt-director] registered with Takt — waiting for tasks. (edits stage locally; review with git diff)');
+    console.log('[takt-director] registered with the director — waiting for tasks. (edits stage locally; review with git diff)');
   });
   socket.on('disconnect', (reason) => {
     console.log(`[takt-director] disconnected (${reason}) — will reconnect…`);
@@ -218,7 +218,7 @@ export function startAgentClient(config: Config, auth: AuthHandle): void {
     console.error(`[takt-director] connection error: ${err.message}`);
   });
 
-  // Server dispatches a coding task (with Takt's chosen model/effort/workflow).
+  // Server dispatches a coding task (with the director's chosen model/effort/workflow).
   socket.on('agent:task', (payload: { taskId?: string; instruction?: string; model?: string; effort?: string; workflow?: boolean }) => {
     if (!payload?.taskId || !payload.instruction?.trim()) return;
 

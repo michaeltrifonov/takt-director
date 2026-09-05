@@ -4,10 +4,9 @@ export interface AskContext {
 }
 
 /**
- * Thin client for Takt's consult endpoint. Used by the ask_takt MCP shim
- * (Claude -> Takt consult). Targets the dedicated server endpoint
- * `POST {consultPath}` which returns `{ answer: string }` and authenticates
- * via the `X-API-Key` header.
+ * Thin client for the director's consult endpoint. Used by the ask_takt MCP shim
+ * (Claude -> director consult). Targets the server endpoint `POST {consultPath}`,
+ * which returns `{ answer: string }` and authenticates via the `X-API-Key` header.
  */
 export class TaktClient {
   constructor(
@@ -28,7 +27,7 @@ export class TaktClient {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Takt consult failed: ${res.status} ${body}`);
+      throw new Error(`consult failed: ${res.status} ${body}`);
     }
 
     const data = (await res.json().catch(() => ({}))) as { answer?: string; text?: string };

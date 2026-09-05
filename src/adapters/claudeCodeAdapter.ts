@@ -37,7 +37,7 @@ export interface ClaudeCodeAdapterOptions {
   reviewTools?: string[];
   reviewBashPatterns?: string[];
 
-  // ── per-task SDK knobs (Takt picks these per dispatch) ──
+  // ── per-task SDK knobs (the director picks these per dispatch) ──
   /** model for this session ('opus' | 'sonnet' | 'haiku' or a full id) */
   model?: Options['model'];
   /** thinking effort ('low' | 'medium' | 'high' | 'xhigh' | 'max') */
@@ -354,7 +354,7 @@ function messageToText(message: Message): string {
 }
 
 // A short, friendly progress label for a tool call — what the user sees streamed
-// on Takt's activity line ("editing config.ts", "running tests", "searching the code").
+// on the chat's activity line ("editing config.ts", "running tests", "searching the code").
 // Kept generic so it reads well for coding AND tool/MCP/data-retrieval work.
 function activityLabel(toolName: string, input: Record<string, unknown>): string {
   const base = (p: unknown): string => {
@@ -390,8 +390,8 @@ function activityLabel(toolName: string, input: Record<string, unknown>): string
     case 'TodoWrite':
       return 'planning the work';
     default: {
-      // MCP tools arrive as `mcp__<server>__<tool>`. ask_takt is Takt consulting
-      // itself — not worth surfacing. Other MCP tools → "using <tool>".
+      // MCP tools arrive as `mcp__<server>__<tool>`. ask_takt is the agent
+      // consulting the director — not worth surfacing. Other MCP tools → "using <tool>".
       if (toolName.startsWith('mcp__')) {
         const tool = toolName.split('__').pop() ?? toolName;
         if (tool === 'ask_takt') return 'thinking it over';

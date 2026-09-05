@@ -1,11 +1,11 @@
 /**
  * The Session seam.
  *
- * This is the ONE abstraction the director (Takt) talks to. It is deliberately
- * shaped after A2A's verbs (message/send, streamed events + artifacts, an
- * INPUT_REQUIRED review gate, an Agent-Card handshake) so that:
+ * This is the ONE abstraction the director talks to. It is deliberately shaped
+ * after A2A's verbs (message/send, streamed events + artifacts, an
+ * INPUT_REQUIRED review gate) so that:
  *   (a) the abstraction is clean regardless of what's underneath, and
- *   (b) if we ever expose Takt's own side as an A2A server, the verbs already match.
+ *   (b) if the director's side is ever exposed as an A2A server, the verbs already match.
  *
  * It is NOT an A2A wire implementation. Claude Code does not speak A2A (verified
  * Jun 2026: no native A2A server/client; Anthropic is MCP-only). The only real
@@ -68,7 +68,7 @@ export interface ReviewRequest {
   reviewId: string;
   toolName: string;
   input: unknown;
-  /** human-readable: "Takt wants to run `git push origin main`" */
+  /** human-readable: "wants to run `git push origin main`" */
   summary: string;
 }
 
@@ -90,7 +90,7 @@ export type SessionEvent =
   // turns it into an image attachment the manager (and the human) can see.
   | { kind: 'visual'; taskId: string; visual: VisualPayload }
   // A short, human-readable progress label ("editing config.ts", "running tests")
-  // streamed live as the agent works — surfaced to the user as Takt's activity line.
+  // streamed live as the agent works — surfaced to the user as the activity line.
   | { kind: 'activity'; taskId: string; label: string }
   | { kind: 'review-request'; taskId: string; review: ReviewRequest }
   | { kind: 'session'; taskId?: string; sessionId: string }

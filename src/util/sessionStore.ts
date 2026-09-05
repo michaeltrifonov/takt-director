@@ -7,8 +7,8 @@ import { dirname, join } from 'node:path';
  *
  * Maps a projectKey (the repo path) -> the last Claude Code SDK session id, so a
  * reconnecting director can `resume` the same session and pick up the code-state
- * context (the SDK's half of memory) instead of starting cold. Pairs with Takt's
- * own cross-channel memory of the creative intent.
+ * context (the SDK's half of memory) instead of starting cold. The director keeps
+ * its own memory of the intent; this file keeps the code's.
  *
  * Small, infrequently-written file; sync fs is fine.
  */

@@ -5,17 +5,17 @@ import { z } from 'zod';
 import { TaktClient } from './taktClient';
 
 /**
- * Takt-MCP — the consult / reverse channel.
+ * The consult / reverse channel.
  *
  * A standalone stdio MCP server exposing `ask_takt`, loaded into the Claude Code
  * session by the adapter. This is the natural direction for MCP here: Claude
  * initiates the call (host pulls a capability). Run on its own, it also drops
- * Takt into any MCP host (Claude / Codex / Cursor).
+ * the director into any MCP host (Claude / Codex / Cursor).
  */
-const takt = new TaktClient(
-  process.env.TAKT_API_URL ?? 'http://localhost:8080',
-  process.env.TAKT_API_KEY,
-  process.env.TAKT_CONSULT_PATH,
+const director = new TaktClient(
+  process.env.CONSULT_API_URL ?? 'http://localhost:3001',
+  process.env.CONSULT_API_KEY,
+  process.env.CONSULT_PATH,
 );
 
 const server = new McpServer({ name: 'takt', version: '0.0.1' });
@@ -24,8 +24,8 @@ const server = new McpServer({ name: 'takt', version: '0.0.1' });
 // installed @modelcontextprotocol/sdk (recent versions may prefer registerTool()).
 server.tool(
   'ask_takt',
-  'Ask Takt — the creative/strategic director — for an opinionated judgment call while you work. ' +
-    'Use when multiple options are viable and you want the one that fits the brand/taste, not a neutral list.',
+  'Ask the director for an opinionated judgment call while you work. Use when multiple options ' +
+    'are viable and you want the one that fits the brand/taste, not a neutral list.',
   {
     question: z.string().describe('the decision or question'),
     options: z.array(z.string()).optional().describe('candidate options, if any'),
@@ -33,8 +33,8 @@ server.tool(
   },
   async ({ question, options, context }) => {
     try {
-      const answer = await takt.ask(question, { options, context });
-      return { content: [{ type: 'text' as const, text: answer || '(takt had no answer)' }] };
+      const answer = await director.ask(question, { options, context });
+      return { content: [{ type: 'text' as const, text: answer || '(the director had no answer)' }] };
     } catch (e) {
       return {
         content: [
